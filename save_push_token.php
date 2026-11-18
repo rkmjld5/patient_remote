@@ -1,3 +1,4 @@
+
 <?php
 /*
  * PATIENT MONITORING SYSTEM
@@ -40,8 +41,14 @@ function jsonResponse($success, $message, $httpCode = 200)
 
 try {
 
+    // Enable MySQLi exceptions for reliable error handling.
+    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
     // Only POST requests are accepted.
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    if (
+        !isset($_SERVER['REQUEST_METHOD']) ||
+        $_SERVER['REQUEST_METHOD'] !== 'POST'
+    ) {
         jsonResponse(false, 'POST request required.', 405);
     }
 
@@ -59,7 +66,11 @@ try {
         !isset($_SESSION['patient_device_id']) ||
         !isset($_SESSION['patient_id'])
     ) {
-        jsonResponse(false, 'Patient login required. Please log in again.', 401);
+        jsonResponse(
+            false,
+            'Patient login required. Please log in again.',
+            401
+        );
     }
 
     $userId = (int) $_SESSION['patient_user_id'];
@@ -126,10 +137,6 @@ try {
 
     $stmt = $conn->prepare($sql);
 
-    if (!$stmt) {
-        throw new Exception('Could not prepare patient validation query.');
-    }
-
     $stmt->bind_param(
         'issssss',
         $userId,
@@ -145,8 +152,16 @@ try {
         throw new Exception('Patient validation query failed.');
     }
 
-    $result = $stmt->get_result();
-    $validPatient = $result->fetch_assoc();
+    // Use bind_result() instead of get_result().
+    // This avoids requiring the MySQL Native Driver (mysqlnd).
+    $stmt->bind_result(
+        $dbUserId,
+        $dbDeviceId,
+        $dbPatientId
+    );
+
+    $validPatient = ($stmt->fetch() === true);
+
     $stmt->close();
 
     if (!$validPatient) {
@@ -176,16 +191,13 @@ try {
             patient_id = VALUES(patient_id),
             device_id = VALUES(device_id),
             fcm_token = VALUES(fcm_token),
+            token_hash = VALUES(token_hash),
             platform = VALUES(platform),
             enabled = 1,
             updated_at = CURRENT_TIMESTAMP
     ";
 
     $saveStmt = $conn->prepare($saveSql);
-
-    if (!$saveStmt) {
-        throw new Exception('Could not prepare token storage query.');
-    }
 
     $saveStmt->bind_param(
         'ssss',
@@ -201,11 +213,20 @@ try {
 
     $saveStmt->close();
 
-    jsonResponse(true, 'Phone notification token registered successfully.');
+    jsonResponse(
+        true,
+        'Phone notification token registered successfully.'
+    );
 
 } catch (Throwable $e) {
 
-    error_log('save_push_token.php error: ' . $e->getMessage());
+    // Log the actual error on the server.
+    // Never return database details or Firebase tokens to the browser.
+    error_log(
+        '[save_push_token.php] ' .
+        get_class($e) . ': ' .
+        $e->getMessage()
+    );
 
     jsonResponse(
         false,
