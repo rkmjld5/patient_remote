@@ -1,6 +1,9 @@
 /*
  * PATIENT MONITORING SYSTEM
+ * File: firebase-messaging-sw.js
+ *
  * Firebase background notification service worker
+ * Firebase project: patientmonitoringsystem-7fb4a
  */
 
 importScripts(
@@ -11,18 +14,29 @@ importScripts(
   'https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js'
 );
 
+// Activate the updated service worker promptly.
+self.addEventListener('install', function(event) {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(event) {
+  event.waitUntil(clients.claim());
+});
+
+// New Firebase Web app configuration.
 firebase.initializeApp({
-  apiKey: "AIzaSyB_k8jMEE9tT1HuTVvnpgQt6iVsHR4vjzM",
-  authDomain: "patientmonitoringsystem-62f35.firebaseapp.com",
-  projectId: "patientmonitoringsystem-62f35",
-  storageBucket: "patientmonitoringsystem-62f35.firebasestorage.app",
-  messagingSenderId: "167833950189",
-  appId: "1:167833950189:web:32d5cc8ba21b67139bb9e4",
-  measurementId: "G-40FY1Q1CFZ"
+  apiKey: "AIzaSyDMvg_UpBpMD2LxXaaEr4nJjqFACmDMwBQ",
+  authDomain: "patientmonitoringsystem-7fb4a.firebaseapp.com",
+  projectId: "patientmonitoringsystem-7fb4a",
+  storageBucket: "patientmonitoringsystem-7fb4a.firebasestorage.app",
+  messagingSenderId: "162369941103",
+  appId: "1:162369941103:web:cf94586b2c00137264279a",
+  measurementId: "G-BS5RCBNLY4"
 });
 
 const messaging = firebase.messaging();
 
+// Background notification handler.
 messaging.onBackgroundMessage(function(payload) {
 
   const data = payload.data || {};
@@ -48,6 +62,7 @@ messaging.onBackgroundMessage(function(payload) {
   return self.registration.showNotification(title, options);
 });
 
+// Handle notification clicks.
 self.addEventListener('notificationclick', function(event) {
 
   event.notification.close();
