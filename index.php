@@ -1,4 +1,3 @@
-
 <?php
 /*
  * ESP32 PATIENT MONITORING SYSTEM
