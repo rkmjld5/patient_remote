@@ -1,137 +1,241 @@
-
 <?php
 /*
  * PATIENT MONITORING SYSTEM
  * File: save_push_token.php
  *
- * Receives Firebase Cloud Messaging browser token.
- * Saves token in patient_push_tokens.
+ * Purpose:
+ *   Save Firebase Cloud Messaging (FCM) token
+ *   for the logged-in patient.
  *
  * Security:
- * - Requires PATIENTSESSID.
- * - Revalidates patient account and device assignment.
- * - Checks account and device expiry dates.
- * - Does not accept patient_id or device_id from browser.
- * - Always returns JSON.
+ *   - Uses the same PATIENTSESSID as patient_login.php.
+ *   - Requires an authenticated patient session.
+ *   - Revalidates patient account and device assignment.
+ *   - Checks account and device validity dates.
+ *   - Does not trust patient/device IDs from the browser.
+ *   - Uses prepared SQL statements.
+ *
+ * Database:
+ *   config.php ($conn)
  */
+
+declare(strict_types=1);
+
+// --------------------------------------------------
+// 1. Start the SAME patient session
+// --------------------------------------------------
+
+if (session_status() === PHP_SESSION_NONE) {
+
+    session_name('PATIENTSESSID');
+
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'domain' => '',
+        'secure' => (
+            isset($_SERVER['HTTPS']) &&
+            $_SERVER['HTTPS'] !== 'off'
+        ),
+        'httponly' => true,
+        'samesite' => 'Lax'
+    ]);
+
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.use_only_cookies', '1');
+
+    session_start();
+}
+
+// --------------------------------------------------
+// 2. JSON response helper
+// --------------------------------------------------
 
 ob_start();
 
 ini_set('display_errors', '0');
-error_reporting(E_ALL);
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate');
 
-function jsonResponse($success, $message, $httpCode = 200)
+function sendJson(int $status, array $data): void
 {
-    while (ob_get_level() > 0) {
-        ob_end_clean();
+    if (ob_get_length()) {
+        ob_clean();
     }
 
-    http_response_code($httpCode);
+    http_response_code($status);
 
-    echo json_encode([
-        'success' => $success,
-        'message' => $message
-    ]);
+    echo json_encode(
+        $data,
+        JSON_UNESCAPED_SLASHES
+    );
 
     exit;
 }
 
+// --------------------------------------------------
+// 3. Allow POST only
+// --------------------------------------------------
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+
+    sendJson(405, [
+        'success' => false,
+        'message' => 'POST request required.'
+    ]);
+}
+
+// --------------------------------------------------
+// 4. Verify patient session
+// --------------------------------------------------
+
+if (
+    ($_SESSION['patient_logged_in'] ?? false) !== true ||
+    empty($_SESSION['patient_user_id']) ||
+    empty($_SESSION['patient_device_id']) ||
+    empty($_SESSION['patient_id'])
+) {
+
+    sendJson(401, [
+        'success' => false,
+        'message' => 'Patient login required. Please log in again.'
+    ]);
+}
+
+$userId = (int)$_SESSION['patient_user_id'];
+
+$deviceId = (string)$_SESSION['patient_device_id'];
+
+$patientId = (string)$_SESSION['patient_id'];
+
+if (
+    $userId <= 0 ||
+    $deviceId === '' ||
+    $patientId === ''
+) {
+
+    sendJson(401, [
+        'success' => false,
+        'message' => 'Invalid patient session. Please log in again.'
+    ]);
+}
+
+// --------------------------------------------------
+// 5. Timezone and database connection
+// --------------------------------------------------
+
+date_default_timezone_set('Asia/Kolkata');
+
 try {
 
-    // Enable MySQLi exceptions for reliable error handling.
-    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+    mysqli_report(
+        MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT
+    );
 
-    // Only POST requests are accepted.
-    if (
-        !isset($_SERVER['REQUEST_METHOD']) ||
-        $_SERVER['REQUEST_METHOD'] !== 'POST'
-    ) {
-        jsonResponse(false, 'POST request required.', 405);
-    }
-
-    // Start the existing patient session.
-    if (session_status() === PHP_SESSION_NONE) {
-        session_name('PATIENTSESSID');
-        session_start();
-    }
-
-    // Verify patient login session.
-    if (
-        !isset($_SESSION['patient_logged_in']) ||
-        $_SESSION['patient_logged_in'] !== true ||
-        !isset($_SESSION['patient_user_id']) ||
-        !isset($_SESSION['patient_device_id']) ||
-        !isset($_SESSION['patient_id'])
-    ) {
-        jsonResponse(
-            false,
-            'Patient login required. Please log in again.',
-            401
-        );
-    }
-
-    $userId = (int) $_SESSION['patient_user_id'];
-    $deviceId = trim((string) $_SESSION['patient_device_id']);
-    $patientId = trim((string) $_SESSION['patient_id']);
-
-    if ($userId <= 0 || $deviceId === '' || $patientId === '') {
-        jsonResponse(false, 'Invalid patient session.', 401);
-    }
-
-    // Load existing database connection.
     require_once __DIR__ . '/config.php';
 
-    if (!isset($conn) || !($conn instanceof mysqli)) {
-        throw new Exception('Database connection is unavailable.');
+    if (
+        !isset($conn) ||
+        !($conn instanceof mysqli)
+    ) {
+
+        throw new RuntimeException(
+            'Database connection unavailable.'
+        );
     }
 
     $conn->set_charset('utf8mb4');
 
-    // Read Firebase token from JSON request.
+    // --------------------------------------------------
+    // 6. Read FCM token from JSON request
+    // --------------------------------------------------
+
     $rawInput = file_get_contents('php://input');
+
+    if ($rawInput === false || $rawInput === '') {
+
+        sendJson(400, [
+            'success' => false,
+            'message' => 'Empty request.'
+        ]);
+    }
+
     $input = json_decode($rawInput, true);
 
-    if (!is_array($input) || !isset($input['token'])) {
-        jsonResponse(false, 'Firebase token is missing.', 400);
+    if (!is_array($input)) {
+
+        sendJson(400, [
+            'success' => false,
+            'message' => 'Invalid JSON request.'
+        ]);
     }
 
-    $fcmToken = trim((string) $input['token']);
+    $token = $input['token'] ?? '';
 
     if (
-        $fcmToken === '' ||
-        strlen($fcmToken) < 20 ||
-        strlen($fcmToken) > 8192
+        !is_string($token) ||
+        trim($token) === '' ||
+        strlen($token) > 8192
     ) {
-        jsonResponse(false, 'Invalid Firebase token.', 400);
+
+        sendJson(400, [
+            'success' => false,
+            'message' => 'Invalid Firebase notification token.'
+        ]);
     }
 
-    // Revalidate account, device, patient and validity dates.
+    $token = trim($token);
+
+    $tokenHash = hash('sha256', $token);
+
+    // --------------------------------------------------
+    // 7. Revalidate patient and device access
+    // --------------------------------------------------
+
     $now = date('Y-m-d H:i:s');
 
     $sql = "
-        SELECT
-            wu.id,
-            wu.device_id,
-            pd.patient_id
-        FROM web_users wu
-        INNER JOIN patient_devices pd
+        SELECT 1
+
+        FROM web_users AS wu
+
+        INNER JOIN patient_devices AS pd
             ON pd.device_id = wu.device_id
-        INNER JOIN patients p
+
+        INNER JOIN patients AS p
             ON p.patient_id = pd.patient_id
+
         WHERE
             wu.id = ?
             AND wu.device_id = ?
             AND pd.patient_id = ?
+
             AND wu.role = 'patient'
             AND wu.enabled = 1
-            AND (wu.valid_from IS NULL OR wu.valid_from <= ?)
-            AND (wu.valid_until IS NULL OR wu.valid_until >= ?)
+
+            AND (
+                wu.valid_from IS NULL
+                OR wu.valid_from <= ?
+            )
+
+            AND (
+                wu.valid_until IS NULL
+                OR wu.valid_until >= ?
+            )
+
             AND pd.enabled = 1
-            AND (pd.start_date_time IS NULL OR pd.start_date_time <= ?)
-            AND (pd.end_date_time IS NULL OR pd.end_date_time >= ?)
+
+            AND (
+                pd.start_date_time IS NULL
+                OR pd.start_date_time <= ?
+            )
+
+            AND (
+                pd.end_date_time IS NULL
+                OR pd.end_date_time >= ?
+            )
+
         LIMIT 1
     ";
 
@@ -148,35 +252,29 @@ try {
         $now
     );
 
-    if (!$stmt->execute()) {
-        throw new Exception('Patient validation query failed.');
-    }
+    $stmt->execute();
 
-    // Use bind_result() instead of get_result().
-    // This avoids requiring the MySQL Native Driver (mysqlnd).
-    $stmt->bind_result(
-        $dbUserId,
-        $dbDeviceId,
-        $dbPatientId
-    );
+    $stmt->bind_result($validRecord);
 
     $validPatient = ($stmt->fetch() === true);
 
     $stmt->close();
 
     if (!$validPatient) {
-        jsonResponse(
-            false,
-            'Patient account or device is disabled or expired.',
-            403
-        );
+
+        sendJson(403, [
+            'success' => false,
+            'message' => 'Patient account or device access is disabled or expired.'
+        ]);
     }
 
-    // Create a unique hash for the Firebase token.
-    $tokenHash = hash('sha256', $fcmToken);
+    // --------------------------------------------------
+    // 8. Save or update Firebase notification token
+    // --------------------------------------------------
 
-    // Save or update the browser token.
-    $saveSql = "
+    $platform = 'ANDROID_CHROME';
+
+    $sql = "
         INSERT INTO patient_push_tokens
         (
             patient_id,
@@ -184,53 +282,59 @@ try {
             fcm_token,
             token_hash,
             platform,
-            enabled
+            enabled,
+            created_at,
+            updated_at
         )
-        VALUES (?, ?, ?, ?, 'ANDROID_CHROME', 1)
+
+        VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW())
+
         ON DUPLICATE KEY UPDATE
+
             patient_id = VALUES(patient_id),
             device_id = VALUES(device_id),
             fcm_token = VALUES(fcm_token),
-            token_hash = VALUES(token_hash),
             platform = VALUES(platform),
             enabled = 1,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = NOW()
     ";
 
-    $saveStmt = $conn->prepare($saveSql);
+    $stmt = $conn->prepare($sql);
 
-    $saveStmt->bind_param(
-        'ssss',
+    $stmt->bind_param(
+        'sssss',
         $patientId,
         $deviceId,
-        $fcmToken,
-        $tokenHash
+        $token,
+        $tokenHash,
+        $platform
     );
 
-    if (!$saveStmt->execute()) {
-        throw new Exception('Could not save Firebase token.');
-    }
+    $stmt->execute();
 
-    $saveStmt->close();
+    $stmt->close();
 
-    jsonResponse(
-        true,
-        'Phone notification token registered successfully.'
-    );
+    // --------------------------------------------------
+    // 9. Success response
+    // --------------------------------------------------
+
+    sendJson(200, [
+        'success' => true,
+        'message' => 'Firebase notification token saved successfully.',
+        'patient_id' => $patientId,
+        'device_id' => $deviceId
+    ]);
 
 } catch (Throwable $e) {
 
-    // Log the actual error on the server.
-    // Never return database details or Firebase tokens to the browser.
     error_log(
         '[save_push_token.php] ' .
         get_class($e) . ': ' .
         $e->getMessage()
     );
 
-    jsonResponse(
-        false,
-        'Server error while saving notification token. Check the PHP error log.',
-        500
-    );
+    sendJson(500, [
+        'success' => false,
+        'message' => 'Server error while saving notification token. Check the PHP error log.'
+    ]);
 }
