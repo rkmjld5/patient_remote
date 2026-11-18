@@ -1,3 +1,4 @@
+
 <?php
 /*
  * ESP32 PATIENT MONITORING SYSTEM
@@ -13,7 +14,7 @@
  *   - Checks account and device validity dates.
  *   - Uses Asia/Kolkata time.
  *
- * Platform: XAMPP + PHP + MySQL
+ * Platform: XAMPP + PHP + MySQL / Render + TiDB
  *
  * Educational prototype only.
  * Not a medical device.
@@ -747,7 +748,7 @@ body {
 // ==================================================
 
 const firebaseConfig = {
-    apiKey: "AIzaSyB_k8jMEEt9T1HuTVvnpgQt6iVsHR4vjzM",
+    apiKey: "AIzaSyB_k8jMEE9tT1HuTVvnpgQt6iVsHR4vjzM",
     authDomain: "patientmonitoringsystem-62f35.firebaseapp.com",
     projectId: "patientmonitoringsystem-62f35",
     storageBucket: "patientmonitoringsystem-62f35.firebasestorage.app",
@@ -755,8 +756,6 @@ const firebaseConfig = {
     appId: "1:167833950189:web:32d5cc8ba21b67139bb9e4",
     measurementId: "G-40FY1Q1CFZ"
 };
-
-// Use the original VAPID key from your Firebase configuration.
 
 const FIREBASE_VAPID_KEY =
     "BMTXxSrFN4EkjDlvYFypqVxyOLv9MZA5DKUbYbAU2Omt8a0Mn_yg92dzqk3J2eec5HltUBRt2R7MxgyiGFDEWxY";
@@ -818,7 +817,32 @@ try {
 }
 
 // ==================================================
-// D. REGISTER ANDROID PHONE
+// D. SERVICE WORKER TIMEOUT HELPER
+// ==================================================
+
+function withTimeout(promise, milliseconds, message) {
+
+    let timeoutId;
+
+    const timeoutPromise = new Promise((resolve, reject) => {
+
+        timeoutId = setTimeout(() => {
+            reject(new Error(message));
+        }, milliseconds);
+
+    });
+
+    return Promise.race([
+        promise,
+        timeoutPromise
+    ]).finally(() => {
+        clearTimeout(timeoutId);
+    });
+
+}
+
+// ==================================================
+// E. REGISTER ANDROID PHONE
 // ==================================================
 
 async function enablePhoneNotifications() {
@@ -882,31 +906,78 @@ async function enablePhoneNotifications() {
 
         }
 
+        // --------------------------------------------------
+        // Register service worker using an absolute URL.
+        // --------------------------------------------------
+
         setPushStatus(
             'Notification permission granted. Registering service worker...'
         );
 
-        const registration =
-            await navigator.serviceWorker.register(
-                'firebase-messaging-sw.js',
+        const registrationPromise =
+            navigator.serviceWorker.register(
+                '/firebase-messaging-sw.js',
                 {
-                    scope: './'
+                    scope: '/'
                 }
             );
 
-        await navigator.serviceWorker.ready;
-
-        setPushStatus(
-            'Service worker registered. Obtaining Firebase phone token...'
+        const registration = await withTimeout(
+            registrationPromise,
+            15000,
+            'Service worker registration timed out after 15 seconds. Please check Chrome service-worker settings.'
         );
 
-        const token = await firebaseMessaging.getToken({
+        // --------------------------------------------------
+        // Wait separately for an active service worker.
+        // --------------------------------------------------
 
-            vapidKey: FIREBASE_VAPID_KEY,
+        setPushStatus(
+            'Service worker registration received. Waiting for activation...'
+        );
 
-            serviceWorkerRegistration: registration
+        const readyRegistration =
+            await withTimeout(
+                navigator.serviceWorker.ready,
+                15000,
+                'Service worker activation timed out after 15 seconds.'
+            );
 
-        });
+        if (
+            !registration.active &&
+            !readyRegistration.active
+        ) {
+
+            throw new Error(
+                'Service worker is registered but is not active. Please retry.'
+            );
+
+        }
+
+        const activeRegistration =
+            readyRegistration.active
+                ? readyRegistration
+                : registration;
+
+        setPushStatus(
+            'Service worker active. Obtaining Firebase phone token...'
+        );
+
+        // --------------------------------------------------
+        // Obtain Firebase Cloud Messaging token.
+        // --------------------------------------------------
+
+        const token = await withTimeout(
+            firebaseMessaging.getToken({
+
+                vapidKey: FIREBASE_VAPID_KEY,
+
+                serviceWorkerRegistration: activeRegistration
+
+            }),
+            20000,
+            'Firebase token request timed out after 20 seconds. Check Firebase configuration and browser internet access.'
+        );
 
         if (!token) {
 
@@ -916,38 +987,59 @@ async function enablePhoneNotifications() {
 
         }
 
+        // --------------------------------------------------
+        // Save token securely on PHP server.
+        // --------------------------------------------------
+
         setPushStatus(
             'Phone token obtained. Saving registration securely...'
         );
 
-        const response = await fetch(
-            SAVE_PUSH_TOKEN_URL,
-            {
+        const response = await withTimeout(
+            fetch(
+                SAVE_PUSH_TOKEN_URL,
+                {
 
-                method: 'POST',
+                    method: 'POST',
 
-                credentials: 'same-origin',
+                    credentials: 'same-origin',
 
-                cache: 'no-store',
+                    cache: 'no-store',
 
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
 
-                body: JSON.stringify({
-                    token: token
-                })
+                    body: JSON.stringify({
+                        token: token
+                    })
 
-            }
+                }
+            ),
+            20000,
+            'Server did not respond while saving the phone registration.'
         );
 
-        const result = await response.json();
+        let result;
+
+        try {
+
+            result = await response.json();
+
+        } catch (error) {
+
+            throw new Error(
+                'Server returned an invalid response while saving the notification token.'
+            );
+
+        }
 
         if (!response.ok || !result.success) {
 
             throw new Error(
                 result.message ||
-                'Could not save phone registration.'
+                'Could not save phone registration. HTTP status: ' +
+                response.status
             );
 
         }
@@ -989,7 +1081,7 @@ document.getElementById('enablePushButton')
     );
 
 // ==================================================
-// E. FOREGROUND NOTIFICATIONS
+// F. FOREGROUND NOTIFICATIONS
 // ==================================================
 
 if (firebaseReady && firebaseMessaging) {
@@ -1051,7 +1143,7 @@ if (firebaseReady && firebaseMessaging) {
 }
 
 // ==================================================
-// F. EXISTING DASHBOARD FUNCTIONS
+// G. EXISTING DASHBOARD FUNCTIONS
 // ==================================================
 
 const API_URL = <?php echo json_encode($api_url); ?>;
@@ -1136,7 +1228,7 @@ function showMonitoring(data) {
 }
 
 // ==================================================
-// G. ECG SAMPLE EXTRACTION
+// H. ECG SAMPLE EXTRACTION
 // ==================================================
 
 function extractECGSamples(ecg) {
@@ -1182,7 +1274,7 @@ function extractECGSamples(ecg) {
 }
 
 // ==================================================
-// H. DRAW ECG WAVEFORM
+// I. DRAW ECG WAVEFORM
 // ==================================================
 
 function drawECG(samples) {
@@ -1333,7 +1425,7 @@ function drawECG(samples) {
 }
 
 // ==================================================
-// I. LOAD LIVE DASHBOARD
+// J. LOAD LIVE DASHBOARD
 // ==================================================
 
 async function loadDashboard() {
@@ -1427,7 +1519,7 @@ async function loadDashboard() {
 }
 
 // ==================================================
-// J. INITIALIZE DASHBOARD
+// K. INITIALIZE DASHBOARD
 // ==================================================
 
 // Initial ECG background.
