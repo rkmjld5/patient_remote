@@ -224,8 +224,6 @@ try {
         rejectPatientAccess();
     }
 
-    // Use verified database values.
-
     $patient_id = (string)$verified_patient_id;
     $device_id = (string)$verified_device_id;
 
@@ -747,17 +745,18 @@ body {
 // ==================================================
 
 const firebaseConfig = {
-    apiKey: "AIzaSyB_k8jMEE9tT1HuTVvnpgQt6iVsHR4vjzM",
-    authDomain: "patientmonitoringsystem-62f35.firebaseapp.com",
-    projectId: "patientmonitoringsystem-62f35",
-    storageBucket: "patientmonitoringsystem-62f35.firebasestorage.app",
-    messagingSenderId: "167833950189",
-    appId: "1:167833950189:web:32d5cc8ba21b67139bb9e4",
-    measurementId: "G-40FY1Q1CFZ"
+    apiKey: "AIzaSyDMvg_UpBpMD2LxXaaEr4nJjqFACmDMwBQ",
+    authDomain: "patientmonitoringsystem-7fb4a.firebaseapp.com",
+    projectId: "patientmonitoringsystem-7fb4a",
+    storageBucket: "patientmonitoringsystem-7fb4a.firebasestorage.app",
+    messagingSenderId: "162369941103",
+    appId: "1:162369941103:web:cf94586b2c00137264279a",
+    measurementId: "G-BS5RCBNLY4"
 };
 
+// Public Web Push VAPID key from the same Firebase project.
 const FIREBASE_VAPID_KEY =
-    "BMTXxSrFN4EkjDlvYFypqVxyOLv9MZA5DKUbYbAU2Omt8a0Mn_yg92dzqk3J2eec5HltUBRt2R7MxgyiGFDEWxY";
+    "BKcwLmwy8zpY6pQWOwh1RYS1kb_60t9oQX1mX5pCLlNHyqxGfAOjkpLWSTnaHYsNGyfyiSc1TZH6e8FWCW8px-E";
 
 const SAVE_PUSH_TOKEN_URL = 'save_push_token.php';
 
@@ -841,7 +840,7 @@ function withTimeout(promise, milliseconds, message) {
 }
 
 // ==================================================
-// E. REGISTER ANDROID PHONE
+// E. REGISTER PHONE / DESKTOP BROWSER
 // ==================================================
 
 async function enablePhoneNotifications() {
@@ -856,7 +855,7 @@ async function enablePhoneNotifications() {
         if (!window.isSecureContext) {
 
             throw new Error(
-                'HTTPS is required for phone notifications.'
+                'HTTPS is required for notifications.'
             );
 
         }
@@ -890,7 +889,7 @@ async function enablePhoneNotifications() {
         // ------------------------------------------
 
         setPushStatus(
-            'Checking Chrome notification permission...'
+            'Checking browser notification permission...'
         );
 
         let permission = Notification.permission;
@@ -910,173 +909,81 @@ async function enablePhoneNotifications() {
         }
 
         // ------------------------------------------
-        // 2. Find existing service-worker registration
+        // 2. Register the updated service worker.
+        // Always call register so Chrome checks for
+        // the new Firebase configuration.
         // ------------------------------------------
 
         setPushStatus(
-            'Checking existing service-worker registration...'
+            'Registering updated Firebase service worker...'
         );
 
-        let registration = await withTimeout(
+        const registration = await withTimeout(
 
-            navigator.serviceWorker.getRegistration(
-                window.location.origin + '/'
+            navigator.serviceWorker.register(
+                '/firebase-messaging-sw.js',
+                {
+                    scope: '/',
+                    updateViaCache: 'none'
+                }
             ),
 
-            10000,
+            30000,
 
-            'Could not retrieve the existing service-worker registration.'
+            'Service-worker registration timed out.'
+
+        );
+
+        // Ask the browser to check for a newer worker.
+        await withTimeout(
+
+            registration.update(),
+
+            20000,
+
+            'Service-worker update check timed out.'
 
         );
 
         // ------------------------------------------
-        // 3. Reuse an existing active worker
+        // 3. Wait for the service worker to be active
         // ------------------------------------------
-
-        if (
-            registration &&
-            registration.active &&
-            registration.active.state === 'activated'
-        ) {
-
-            console.log(
-                'Reusing existing active service worker:',
-                registration.active.scriptURL
-            );
-
-        } else {
-
-            // Register only when there is no active worker.
-
-            setPushStatus(
-                'No active service worker found. Registering now...'
-            );
-
-            registration = await withTimeout(
-
-                navigator.serviceWorker.register(
-                    '/firebase-messaging-sw.js',
-                    {
-                        scope: '/'
-                    }
-                ),
-
-                30000,
-
-                'New service-worker registration timed out after 30 seconds.'
-
-            );
-
-        }
-
-        if (!registration) {
-
-            throw new Error(
-                'Chrome did not provide a service-worker registration.'
-            );
-
-        }
-
-        // ------------------------------------------
-        // 4. Wait for activation only when necessary
-        // ------------------------------------------
-
-        let activeWorker = registration.active;
-
-        if (
-            !activeWorker ||
-            activeWorker.state !== 'activated'
-        ) {
-
-            setPushStatus(
-                'Service worker found. Waiting for activation...'
-            );
-
-            activeWorker = await withTimeout(
-
-                new Promise((resolve, reject) => {
-
-                    const worker =
-                        registration.installing ||
-                        registration.waiting;
-
-                    if (!worker) {
-
-                        reject(
-                            new Error(
-                                'No installing or waiting service worker was found.'
-                            )
-                        );
-
-                        return;
-
-                    }
-
-                    function checkState() {
-
-                        if (worker.state === 'activated') {
-
-                            worker.removeEventListener(
-                                'statechange',
-                                checkState
-                            );
-
-                            resolve(worker);
-
-                        } else if (
-                            worker.state === 'redundant'
-                        ) {
-
-                            worker.removeEventListener(
-                                'statechange',
-                                checkState
-                            );
-
-                            reject(
-                                new Error(
-                                    'Service worker became redundant.'
-                                )
-                            );
-
-                        }
-
-                    }
-
-                    worker.addEventListener(
-                        'statechange',
-                        checkState
-                    );
-
-                    checkState();
-
-                }),
-
-                30000,
-
-                'Service worker activation timed out.'
-
-            );
-
-        }
-
-        if (
-            !activeWorker ||
-            activeWorker.state !== 'activated'
-        ) {
-
-            throw new Error(
-                'Service worker is not active.'
-            );
-
-        }
 
         setPushStatus(
-            'Active service worker found. Obtaining Firebase phone token...'
+            'Waiting for Firebase service worker activation...'
         );
 
+        const readyRegistration = await withTimeout(
+
+            navigator.serviceWorker.ready,
+
+            30000,
+
+            'Service worker activation timed out.'
+
+        );
+
+        const activeRegistration =
+            readyRegistration || registration;
+
+        if (
+            !activeRegistration.active ||
+            activeRegistration.active.state !== 'activated'
+        ) {
+
+            throw new Error(
+                'Service worker is not active. Please reload the page and try again.'
+            );
+
+        }
+
         // ------------------------------------------
-        // 5. Obtain Firebase Cloud Messaging token
+        // 4. Obtain Firebase Cloud Messaging token
         // ------------------------------------------
+
+        setPushStatus(
+            'Service worker is active. Obtaining browser notification token...'
+        );
 
         const token = await withTimeout(
 
@@ -1084,7 +991,7 @@ async function enablePhoneNotifications() {
 
                 vapidKey: FIREBASE_VAPID_KEY,
 
-                serviceWorkerRegistration: registration
+                serviceWorkerRegistration: activeRegistration
 
             }),
 
@@ -1103,11 +1010,11 @@ async function enablePhoneNotifications() {
         }
 
         // ------------------------------------------
-        // 6. Save token securely on PHP server
+        // 5. Save token securely on PHP server
         // ------------------------------------------
 
         setPushStatus(
-            'Phone token obtained. Saving registration securely...'
+            'Token obtained. Saving browser registration securely...'
         );
 
         const response = await withTimeout(
@@ -1135,7 +1042,7 @@ async function enablePhoneNotifications() {
 
             20000,
 
-            'Server did not respond while saving the phone registration.'
+            'Server did not respond while saving the notification token.'
 
         );
 
@@ -1158,32 +1065,32 @@ async function enablePhoneNotifications() {
 
             throw new Error(
                 result.message ||
-                'Could not save phone registration. HTTP status: ' +
+                'Could not save browser registration. HTTP status: ' +
                 response.status
             );
 
         }
 
         // ------------------------------------------
-        // 7. Registration successful
+        // 6. Registration successful
         // ------------------------------------------
 
         setPushStatus(
-            'SUCCESS! This phone is registered for patient monitoring notifications.',
+            'SUCCESS! This browser is registered for patient monitoring notifications.',
             'success'
         );
 
         button.textContent =
-            'Phone Notifications Enabled';
+            'Notifications Enabled';
 
         console.log(
-            'Phone notification registration completed successfully.'
+            'Browser notification registration completed successfully.'
         );
 
     } catch (error) {
 
         console.error(
-            'Phone notification registration error:',
+            'Browser notification registration error:',
             error
         );
 
@@ -1601,30 +1508,20 @@ async function loadDashboard() {
 
         }
 
-        // Update patient information.
-
         showPatient(result.patient);
 
-        // Update all five live sensor readings.
-
         showMonitoring(result.monitoring);
-
-        // Update ECG waveform.
 
         const ecgSamples =
             extractECGSamples(result.ecg);
 
         drawECG(ecgSamples);
 
-        // Update connection status.
-
         status.className = 'status';
 
         status.textContent = result.monitoring
             ? 'Connected - Latest monitoring data received.'
             : 'Connected - Waiting for monitoring readings.';
-
-        // Update server time.
 
         showValue('serverTime', result.server_time);
 
@@ -1648,19 +1545,11 @@ async function loadDashboard() {
 // K. INITIALIZE DASHBOARD
 // ==================================================
 
-// Initial ECG background.
-
 drawECG([]);
-
-// Load dashboard immediately.
 
 loadDashboard();
 
-// Automatic refresh every five seconds.
-
 setInterval(loadDashboard, 5000);
-
-// Redraw ECG after browser resize.
 
 window.addEventListener('resize', function() {
 
