@@ -1,14 +1,15 @@
+
 <?php
 
 $file = '/etc/secrets/firebase-service-account.json';
 
 echo "<h3>Render Firebase Group Diagnostic</h3>";
 
-echo "PHP effective user ID: ";
+echo "<b>1. PHP process identity</b><br>";
 
 if (function_exists('posix_geteuid')) {
     $uid = posix_geteuid();
-    echo $uid . "<br>";
+    echo "Effective user ID: $uid<br>";
 
     $user = posix_getpwuid($uid);
     echo "PHP process user: " .
@@ -17,7 +18,7 @@ if (function_exists('posix_geteuid')) {
     echo "POSIX extension unavailable<br>";
 }
 
-echo "<br><b>PHP process groups:</b><br>";
+echo "<br><b>2. PHP process groups</b><br>";
 
 if (function_exists('posix_getgroups')) {
     $groups = posix_getgroups();
@@ -36,19 +37,21 @@ if (function_exists('posix_getgroups')) {
     echo "Cannot inspect supplementary groups<br>";
 }
 
-echo "<br><b>Secret file:</b><br>";
+echo "<br><b>3. Firebase secret file</b><br>";
 
+echo "Path: " . htmlspecialchars($file) . "<br>";
 echo "Exists: " . (file_exists($file) ? "YES" : "NO") . "<br>";
 echo "Readable: " . (is_readable($file) ? "YES" : "NO") . "<br>";
 
 if (file_exists($file)) {
     echo "Owner ID: " . fileowner($file) . "<br>";
     echo "Group ID: " . filegroup($file) . "<br>";
+
     echo "Permissions: " .
          substr(sprintf('%o', fileperms($file)), -4) . "<br>";
 }
 
-echo "<br><b>Read test:</b><br>";
+echo "<br><b>4. Actual read test</b><br>";
 
 $data = @file_get_contents($file);
 
