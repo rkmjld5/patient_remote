@@ -2,60 +2,73 @@
 
 $file = '/etc/secrets/firebase-service-account.json';
 
-echo "<h3>Render Firebase Group Diagnostic</h3>";
+echo "<h3>Firebase Credential Validation</h3>";
 
-echo "<b>1. PHP process identity</b><br>";
-
-if (function_exists('posix_geteuid')) {
-    $uid = posix_geteuid();
-    echo "Effective user ID: $uid<br>";
-
-    $user = posix_getpwuid($uid);
-    echo "PHP process user: " .
-         htmlspecialchars($user['name'] ?? 'Unknown') . "<br>";
-} else {
-    echo "POSIX extension unavailable<br>";
+if (!file_exists($file) || !is_readable($file)) {
+    exit("ERROR: Firebase file missing or unreadable.");
 }
 
-echo "<br><b>2. PHP process groups</b><br>";
+$json = file_get_contents($file);
+$data = json_decode($json, true);
 
-if (function_exists('posix_getgroups')) {
-    $groups = posix_getgroups();
+if (!is_array($data)) {
+    exit("ERROR: Invalid JSON: " . json_last_error_msg());
+}
 
-    foreach ($groups as $gid) {
-        $group = posix_getgrgid($gid);
-        echo "Group ID: $gid";
+echo "JSON syntax: VALID<br><br>";
 
-        if ($group) {
-            echo " (" . htmlspecialchars($group['name']) . ")";
-        }
+$required = [
+    'type',
+    'project_id',
+    'private_key',
+    'client_email',
+    'token_uri'
+];
 
-        echo "<br>";
+foreach ($required as $field) {
+    $present = isset($data[$field]) &&
+               is_string($data[$field]) &&
+               trim($data[$field]) !== '';
+
+    echo htmlspecialchars($field) . ": ";
+    echo $present ? "PRESENT" : "MISSING";
+    echo "<br>";
+}
+
+echo "<br>Account type: ";
+echo htmlspecialchars($data['type'] ?? 'MISSING');
+
+echo "<br>Project ID: ";
+echo htmlspecialchars($data['project_id'] ?? 'MISSING');
+
+echo "<br>Expected project ID: patientmonitoringsystem-62f35";
+
+echo "<br>Project ID matches: ";
+echo (($data['project_id'] ?? '') ===
+      'patientmonitoringsystem-62f35') ? "YES" : "NO";
+
+echo "<br>Private key format: ";
+
+$key = $data['private_key'] ?? '';
+
+if (is_string($key) &&
+    strpos($key, '-----BEGIN PRIVATE KEY-----') !== false &&
+    strpos($key, '-----END PRIVATE KEY-----') !== false) {
+    echo "PEM MARKERS PRESENT";
+} else {
+    echo "INVALID OR MISSING";
+}
+
+echo "<br>OpenSSL validation: ";
+
+if (is_string($key) && function_exists('openssl_pkey_get_private')) {
+    $privateKey = @openssl_pkey_get_private($key);
+
+    echo $privateKey !== false ? "VALID" : "FAILED";
+
+    if ($privateKey !== false) {
+        openssl_pkey_free($privateKey);
     }
 } else {
-    echo "Cannot inspect supplementary groups<br>";
-}
-
-echo "<br><b>3. Firebase secret file</b><br>";
-
-echo "Path: " . htmlspecialchars($file) . "<br>";
-echo "Exists: " . (file_exists($file) ? "YES" : "NO") . "<br>";
-echo "Readable: " . (is_readable($file) ? "YES" : "NO") . "<br>";
-
-if (file_exists($file)) {
-    echo "Owner ID: " . fileowner($file) . "<br>";
-    echo "Group ID: " . filegroup($file) . "<br>";
-
-    echo "Permissions: " .
-         substr(sprintf('%o', fileperms($file)), -4) . "<br>";
-}
-
-echo "<br><b>4. Actual read test</b><br>";
-
-$data = @file_get_contents($file);
-
-if ($data === false) {
-    echo "FAILED: PHP cannot read the file.";
-} else {
-    echo "SUCCESS: " . strlen($data) . " bytes read.";
+    echo "NOT AVAILABLE";
 }
