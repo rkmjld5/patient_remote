@@ -3,23 +3,19 @@
  * PATIENT MONITORING SYSTEM
  * File: send_push_notification.php
  *
- * Secure Firebase HTTP v1 test notification.
+ * RENDER VERSION - FIREBASE HTTP v1 TEST NOTIFICATION
  *
- * Sends a test notification only to the registered
- * phone tokens of the currently logged-in patient.
+ * Firebase secret file:
+ * /etc/secrets/firebase-service-account.json
  *
- * Uses:
- *   config.php
- *   patient_push_tokens
- *   patient_devices
- *   web_users
- *   patients
+ * Database:
+ * config.php (Render/TiDB mysqli connection)
  *
- * Service account:
- *   C:\xampp\private\firebase-service-account.json
+ * Sends a manual test notification to enabled tokens
+ * belonging to the currently logged-in patient/device.
  *
- * This is a test sender. Automatic alert integration
- * will be added separately after successful testing.
+ * This file does NOT require ESP32 readings.
+ * It does NOT delete or disable any tokens.
  */
 
 declare(strict_types=1);
@@ -36,10 +32,7 @@ session_set_cookie_params([
     'lifetime' => 0,
     'path' => '/',
     'domain' => '',
-    'secure' => (
-        isset($_SERVER['HTTPS']) &&
-        $_SERVER['HTTPS'] !== 'off'
-    ),
+    'secure' => true,
     'httponly' => true,
     'samesite' => 'Lax'
 ]);
@@ -57,6 +50,10 @@ require_once __DIR__ . '/config.php';
 
 function outputPage(string $message, bool $success = false): void
 {
+    http_response_code($success ? 200 : (
+        http_response_code() >= 400 ? http_response_code() : 400
+    ));
+
     $color = $success ? '#166534' : '#991b1b';
 
     echo '<!DOCTYPE html>
@@ -79,20 +76,12 @@ body {
     border-radius: 10px;
     box-shadow: 0 2px 8px #0002;
 }
-button {
-    padding: 13px 20px;
-    background: #15803d;
-    color: white;
-    border: 0;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 16px;
-}
 .message {
     padding: 14px;
     background: #f1f5f9;
     border-left: 5px solid ' . $color . ';
     overflow-wrap: anywhere;
+    line-height: 1.6;
 }
 a {
     display: inline-block;
@@ -141,7 +130,17 @@ if ($userId <= 0 || $deviceId === '' || $patientId === '') {
 }
 
 // --------------------------------------------------
-// 4. VERIFY ACCOUNT AND DEVICE
+// 4. VERIFY DATABASE CONNECTION
+// --------------------------------------------------
+
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    error_log('Push test: Render mysqli connection unavailable.');
+    http_response_code(500);
+    outputPage('Database connection is unavailable.');
+}
+
+// --------------------------------------------------
+// 5. VERIFY PATIENT ACCOUNT AND DEVICE
 // --------------------------------------------------
 
 $now = date('Y-m-d H:i:s');
@@ -186,11 +185,15 @@ $stmt->bind_param(
     $now
 );
 
-$stmt->execute();
+if (!$stmt->execute()) {
+    $stmt->close();
+    error_log('Push test: patient verification query failed.');
+    http_response_code(500);
+    outputPage('Unable to verify patient access.');
+}
+
 $stmt->store_result();
-
 $valid = ($stmt->num_rows === 1);
-
 $stmt->close();
 
 if (!$valid) {
@@ -199,7 +202,7 @@ if (!$valid) {
 }
 
 // --------------------------------------------------
-// 5. CSRF TOKEN
+// 6. CSRF TOKEN
 // --------------------------------------------------
 
 if (empty($_SESSION['push_test_csrf'])) {
@@ -207,7 +210,7 @@ if (empty($_SESSION['push_test_csrf'])) {
 }
 
 // --------------------------------------------------
-// 6. SHOW TEST FORM ON GET
+// 7. SHOW TEST FORM
 // --------------------------------------------------
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -252,13 +255,13 @@ button {
 <body>
 <div class="box">
 <h2>Patient Monitoring - Push Test</h2>
-<p>Patient ID: ' .
-htmlspecialchars($patientId, ENT_QUOTES, 'UTF-8') .
+<p>Patient ID: '
+. htmlspecialchars($patientId, ENT_QUOTES, 'UTF-8') .
 '</p>
-<p>Device ID: ' .
-htmlspecialchars($deviceId, ENT_QUOTES, 'UTF-8') .
+<p>Device ID: '
+. htmlspecialchars($deviceId, ENT_QUOTES, 'UTF-8') .
 '</p>
-<p>This sends one test notification to this patient\'s enabled registered phone tokens.</p>
+<p>This sends a test notification to this patient\'s enabled registered phone tokens.</p>
 <form method="POST">
 <input type="hidden" name="csrf" value="' . $csrf . '">
 <button type="submit">Send Test Notification</button>
@@ -272,13 +275,17 @@ htmlspecialchars($deviceId, ENT_QUOTES, 'UTF-8') .
 }
 
 // --------------------------------------------------
-// 7. ACCEPT ONLY POST
+// 8. ACCEPT ONLY POST
 // --------------------------------------------------
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     outputPage('Method not allowed.');
 }
+
+// --------------------------------------------------
+// 9. VERIFY CSRF
+// --------------------------------------------------
 
 if (
     !isset($_POST['csrf']) ||
@@ -292,19 +299,23 @@ if (
 }
 
 // --------------------------------------------------
-// 8. LOAD FIREBASE SERVICE ACCOUNT
+// 10. LOAD RENDER FIREBASE SECRET FILE
 // --------------------------------------------------
 
-$serviceFile =
-    'C:\\xampp\\private\\firebase-service-account.json';
+$serviceFile = '/etc/secrets/firebase-service-account.json';
 
 if (!is_file($serviceFile) || !is_readable($serviceFile)) {
-    error_log('Push test: Firebase service account file unavailable.');
+    error_log('Push test: Render Firebase secret file unavailable.');
     http_response_code(500);
-    outputPage('Firebase service-account file was not found or cannot be read.');
+    outputPage('Firebase service-account secret file is not available on Render.');
 }
 
 $serviceJson = file_get_contents($serviceFile);
+
+if ($serviceJson === false) {
+    http_response_code(500);
+    outputPage('Unable to read Firebase service-account secret file.');
+}
 
 $service = json_decode($serviceJson, true);
 
@@ -320,39 +331,34 @@ if (
     outputPage('Firebase service-account JSON is invalid or incomplete.');
 }
 
+// --------------------------------------------------
+// 11. VERIFY FIREBASE PROJECT
+// --------------------------------------------------
+
 $expectedProject = 'patientmonitoringsystem-62f35';
 
 if ($service['project_id'] !== $expectedProject) {
     error_log('Push test: Firebase project ID mismatch.');
     http_response_code(500);
-    outputPage('The service-account key belongs to a different Firebase project.');
+    outputPage('The Firebase secret file belongs to a different project.');
 }
 
 // --------------------------------------------------
-// 9. CHECK REQUIRED PHP EXTENSIONS
+// 12. CHECK REQUIRED PHP EXTENSIONS
 // --------------------------------------------------
 
 if (!function_exists('curl_init')) {
     http_response_code(500);
-    outputPage('PHP cURL extension is not enabled in XAMPP.');
+    outputPage('PHP cURL extension is not enabled on Render.');
 }
 
 if (!function_exists('openssl_sign')) {
     http_response_code(500);
-    outputPage('PHP OpenSSL extension is not enabled in XAMPP.');
-}
-
-// Use the CA certificate bundle already present in this XAMPP installation.
-// SSL certificate verification remains enabled.
-$caBundle = 'C:/xampp/php/extras/ssl/cacert-avast.pem';
-
-if (!is_file($caBundle) || !is_readable($caBundle)) {
-    http_response_code(500);
-    outputPage('The SSL CA certificate file is missing or unreadable: ' . $caBundle);
+    outputPage('PHP OpenSSL extension is not enabled on Render.');
 }
 
 // --------------------------------------------------
-// 10. JWT HELPERS
+// 13. BASE64 URL ENCODING
 // --------------------------------------------------
 
 function base64UrlEncode(string $data): string
@@ -363,16 +369,29 @@ function base64UrlEncode(string $data): string
     );
 }
 
-function postJson(string $url, array $headers, array $data, string $caBundle): array
-{
+// --------------------------------------------------
+// 14. CURL JSON REQUEST
+// --------------------------------------------------
+
+function postJson(
+    string $url,
+    array $headers,
+    array $data
+): array {
+
+    $json = json_encode($data);
+
+    if ($json === false) {
+        throw new RuntimeException('Could not encode Firebase request.');
+    }
+
     $ch = curl_init($url);
 
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_POSTFIELDS => json_encode($data),
-        CURLOPT_CAINFO => $caBundle,
+        CURLOPT_POSTFIELDS => $json,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_CONNECTTIMEOUT => 15,
@@ -386,7 +405,9 @@ function postJson(string $url, array $headers, array $data, string $caBundle): a
     curl_close($ch);
 
     if ($response === false) {
-        throw new RuntimeException('Network request failed: ' . $error);
+        throw new RuntimeException(
+            'Firebase network request failed: ' . $error
+        );
     }
 
     $decoded = json_decode($response, true);
@@ -399,7 +420,52 @@ function postJson(string $url, array $headers, array $data, string $caBundle): a
 }
 
 // --------------------------------------------------
-// 11. CREATE GOOGLE OAUTH ACCESS TOKEN
+// 15. GET ENABLED TOKENS FOR THIS PATIENT/DEVICE
+// --------------------------------------------------
+
+$tokenStmt = $conn->prepare("
+    SELECT fcm_token
+    FROM patient_push_tokens
+    WHERE
+        patient_id = ?
+        AND device_id = ?
+        AND enabled = 1
+");
+
+if (!$tokenStmt) {
+    error_log('Push test: token query prepare failed.');
+    http_response_code(500);
+    outputPage('Unable to read registered phone tokens.');
+}
+
+$tokenStmt->bind_param('ss', $patientId, $deviceId);
+
+if (!$tokenStmt->execute()) {
+    $tokenStmt->close();
+    error_log('Push test: token query failed.');
+    http_response_code(500);
+    outputPage('Unable to read registered phone tokens.');
+}
+
+$tokenStmt->bind_result($fcmToken);
+
+$tokens = [];
+
+while ($tokenStmt->fetch()) {
+    if (is_string($fcmToken) && $fcmToken !== '') {
+        $tokens[] = $fcmToken;
+    }
+}
+
+$tokenStmt->close();
+
+if (count($tokens) === 0) {
+    http_response_code(404);
+    outputPage('No enabled phone registration was found for this patient and device.');
+}
+
+// --------------------------------------------------
+// 16. CREATE GOOGLE OAUTH JWT
 // --------------------------------------------------
 
 try {
@@ -419,9 +485,16 @@ try {
         'exp' => $issuedAt + 3600
     ];
 
+    $headerJson = json_encode($jwtHeader);
+    $claimsJson = json_encode($jwtClaims);
+
+    if ($headerJson === false || $claimsJson === false) {
+        throw new RuntimeException('Could not create authentication claims.');
+    }
+
     $unsignedJwt =
-        base64UrlEncode(json_encode($jwtHeader)) . '.' .
-        base64UrlEncode(json_encode($jwtClaims));
+        base64UrlEncode($headerJson) . '.' .
+        base64UrlEncode($claimsJson);
 
     $privateKey = openssl_pkey_get_private(
         $service['private_key']
@@ -448,7 +521,10 @@ try {
 
     $jwt = $unsignedJwt . '.' . base64UrlEncode($signature);
 
-    // OAuth token exchange uses form data, not JSON.
+    // --------------------------------------------------
+    // 17. EXCHANGE JWT FOR GOOGLE ACCESS TOKEN
+    // --------------------------------------------------
+
     $ch = curl_init($service['token_uri']);
 
     curl_setopt_array($ch, [
@@ -461,7 +537,6 @@ try {
             'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
             'assertion' => $jwt
         ]),
-        CURLOPT_CAINFO => $caBundle,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_CONNECTTIMEOUT => 15,
@@ -475,7 +550,9 @@ try {
     curl_close($ch);
 
     if ($oauthResponse === false) {
-        throw new RuntimeException('Google authentication network error: ' . $oauthError);
+        throw new RuntimeException(
+            'Google authentication network error: ' . $oauthError
+        );
     }
 
     $oauthData = json_decode($oauthResponse, true);
@@ -485,78 +562,61 @@ try {
         $oauthStatus >= 300 ||
         empty($oauthData['access_token'])
     ) {
-        error_log('Push test OAuth failure: HTTP ' . $oauthStatus . ' ' . $oauthResponse);
-        throw new RuntimeException('Google rejected Firebase authentication. Check the service-account key and permissions.');
+        error_log(
+            'Push test OAuth failure: HTTP ' .
+            $oauthStatus . ' ' . $oauthResponse
+        );
+
+        throw new RuntimeException(
+            'Google rejected Firebase authentication. Check the service-account key and Firebase permissions.'
+        );
     }
 
     $accessToken = $oauthData['access_token'];
 
     // --------------------------------------------------
-    // 12. GET ENABLED TOKENS FOR THIS PATIENT AND DEVICE
+    // 18. FIREBASE HTTP V1 SEND URL
     // --------------------------------------------------
 
-    $tokenStmt = $conn->prepare("
-        SELECT fcm_token
-        FROM patient_push_tokens
-        WHERE
-            patient_id = ?
-            AND device_id = ?
-            AND enabled = 1
-    ");
-
-    if (!$tokenStmt) {
-        throw new RuntimeException('Could not prepare push-token query.');
-    }
-
-    $tokenStmt->bind_param('ss', $patientId, $deviceId);
-    $tokenStmt->execute();
-    $tokenStmt->bind_result($fcmToken);
-
-    $tokens = [];
-
-    while ($tokenStmt->fetch()) {
-        if (!empty($fcmToken)) {
-            $tokens[] = $fcmToken;
-        }
-    }
-
-    $tokenStmt->close();
-
-    if (count($tokens) === 0) {
-        outputPage('No enabled phone registration was found for this patient and device.');
-    }
+    $fcmUrl =
+        'https://fcm.googleapis.com/v1/projects/' .
+        rawurlencode($expectedProject) .
+        '/messages:send';
 
     // --------------------------------------------------
-    // 13. SEND TEST NOTIFICATION
+    // 19. SEND TEST NOTIFICATION TO EACH TOKEN
     // --------------------------------------------------
 
     $successCount = 0;
     $failureCount = 0;
-
-    $fcmUrl =
-        'https://fcm.googleapis.com/v1/projects/' .
-        rawurlencode($service['project_id']) .
-        '/messages:send';
 
     foreach ($tokens as $token) {
 
         $message = [
             'message' => [
                 'token' => $token,
+
                 'notification' => [
                     'title' => 'Patient Monitoring Test',
-                    'body' => 'SUCCESS! Firebase push notification delivery test for patient ' . $patientId . '.'
+                    'body' => 'SUCCESS! Firebase push notification test for patient ' .
+                              $patientId . '.'
                 ],
+
                 'data' => [
                     'type' => 'TEST',
                     'title' => 'Patient Monitoring Test',
                     'body' => 'Firebase push notification delivery test.',
                     'patient_id' => $patientId
                 ],
+
                 'webpush' => [
                     'notification' => [
                         'icon' => 'https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/firebase-logo.png',
-                        'tag' => 'patient-monitor-test'
+                        'tag' => 'patient-monitor-test-' . bin2hex(random_bytes(4))
+                    ],
+
+                    'fcm_options' => [
+                        'link' => 'https://patient-remote.onrender.com/index.php'
                     ]
                 ]
             ]
@@ -568,11 +628,13 @@ try {
                 'Authorization: Bearer ' . $accessToken,
                 'Content-Type: application/json'
             ],
-            $message,
-            $caBundle
+            $message
         );
 
-        if ($result['status'] >= 200 && $result['status'] < 300) {
+        if (
+            $result['status'] >= 200 &&
+            $result['status'] < 300
+        ) {
 
             $successCount++;
 
@@ -580,7 +642,7 @@ try {
 
             $failureCount++;
 
-            // Do not log the actual FCM registration token.
+            // Never log the actual Firebase registration token.
             error_log(
                 'Push test FCM failure: HTTP ' .
                 $result['status'] . ' ' .
@@ -589,24 +651,30 @@ try {
         }
     }
 
+    // --------------------------------------------------
+    // 20. SHOW RESULT
+    // --------------------------------------------------
+
     if ($successCount > 0) {
 
         outputPage(
-            'Firebase accepted the test notification for ' .
+            'Firebase accepted ' .
             $successCount .
-            ' registered phone(s). Please check your Android notification panel. ' .
-            'Failed sends: ' . $failureCount . '.',
+            ' test notification(s). ' .
+            'Registered tokens checked: ' . count($tokens) . '. ' .
+            'Failed sends: ' . $failureCount . '. ' .
+            'Please check your Android notification panel.',
             true
         );
-
     }
 
     throw new RuntimeException(
-        'Firebase did not accept the test notification. Check the PHP error log.'
+        'Firebase did not accept any test notification. Check the Render application logs.'
     );
 
 } catch (Throwable $e) {
 
+    // Do not display internal credentials or private-key information.
     error_log(
         'Push notification test error: ' . $e->getMessage()
     );
@@ -614,6 +682,6 @@ try {
     http_response_code(500);
 
     outputPage(
-        'Test notification failed: ' . $e->getMessage()
+        'Test notification failed. Please check the Render application logs for the technical error.'
     );
 }
