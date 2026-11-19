@@ -1,4 +1,3 @@
-
 <?php
 
 $file = '/etc/secrets/firebase-service-account.json';
