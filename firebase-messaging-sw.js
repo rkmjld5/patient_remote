@@ -1,4 +1,3 @@
-
 /*
  * PATIENT MONITORING SYSTEM
  * File: firebase-messaging-sw.js
