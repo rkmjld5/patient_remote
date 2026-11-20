@@ -466,7 +466,7 @@ button {
         OPENSSL_ALGO_SHA256
     );
 
-    openssl_free_key($privateKey);
+    //openssl_free_key($privateKey);
 
     if (!$signed) {
         throw new RuntimeException('Could not sign OAuth JWT.');
