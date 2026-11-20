@@ -585,7 +585,7 @@ Send Test Notification
     // ----------------------------------------------
 
     $tokenStmt = $conn->prepare("
-        SELECT fcm_token
+        SELECT id, fcm_token, token_hash
 
         FROM patient_push_tokens
 
@@ -594,6 +594,8 @@ Send Test Notification
           AND device_id = ?
 
           AND enabled = 1
+
+        ORDER BY id
     ");
 
     if (!$tokenStmt) {
@@ -611,7 +613,11 @@ Send Test Notification
 
     $tokenStmt->execute();
 
-    $tokenStmt->bind_result($fcmToken);
+    $tokenStmt->bind_result(
+        $tokenId,
+        $fcmToken,
+        $tokenHash
+    );
 
     $tokens = [];
 
@@ -622,7 +628,13 @@ Send Test Notification
             $fcmToken !== ''
         ) {
 
-            $tokens[] = $fcmToken;
+            $tokens[] = [
+                'id' => (int)$tokenId,
+                'token' => $fcmToken,
+                // A short hash prefix identifies a registration in logs
+                // without recording the private FCM registration token.
+                'hash_prefix' => substr((string)$tokenHash, 0, 12)
+            ];
         }
     }
 
@@ -825,9 +837,15 @@ Send Test Notification
 
     $failureCount = 0;
 
+    $successDetails = [];
+
     $failureDetails = [];
 
-    foreach ($tokens as $token) {
+    foreach ($tokens as $tokenRow) {
+
+        $rowId = (int)$tokenRow['id'];
+        $token = (string)$tokenRow['token'];
+        $hashPrefix = (string)$tokenRow['hash_prefix'];
 
         $message = [
 
@@ -835,9 +853,8 @@ Send Test Notification
 
                 'token' => $token,
 
-                // Data-only message.
-                // The service worker displays
-                // background notifications.
+                // Data-only message. The registered service worker
+                // must handle onBackgroundMessage and display it.
 
                 'data' => [
 
@@ -895,52 +912,80 @@ Send Test Notification
 
             $successCount++;
 
+            $responseName = '';
+
+            if (
+                is_array($result['body']) &&
+                isset($result['body']['name'])
+            ) {
+                $responseName = (string)$result['body']['name'];
+            }
+
+            $successDetails[] = 'Registration ID ' . $rowId .
+                ' accepted by Firebase';
+
+            error_log(
+                'Firebase FCM accepted: patient=' . $patientId .
+                ', device=' . $deviceId .
+                ', token_row_id=' . $rowId .
+                ', token_hash_prefix=' . $hashPrefix .
+                ', http=' . $result['status'] .
+                ', message_name=' . ($responseName !== '' ? $responseName : 'not-returned')
+            );
+
         } else {
 
             $failureCount++;
 
             $errorData = $result['body'];
 
-            $firebaseMessage =
-                'No error description returned.';
-
+            $firebaseMessage = 'No error description returned.';
             $firebaseStatus = '';
+            $errorDetails = [];
 
-            if (
-                is_array($errorData) &&
-                isset($errorData['error']['message'])
-            ) {
+            if (is_array($errorData) && isset($errorData['error'])) {
 
-                $firebaseMessage =
-                    (string)$errorData['error']['message'];
+                if (isset($errorData['error']['message'])) {
+                    $firebaseMessage = (string)$errorData['error']['message'];
+                }
+
+                if (isset($errorData['error']['status'])) {
+                    $firebaseStatus = (string)$errorData['error']['status'];
+                }
+
+                if (isset($errorData['error']['details']) &&
+                    is_array($errorData['error']['details'])) {
+                    $errorDetails = $errorData['error']['details'];
+                }
             }
 
-            if (
-                is_array($errorData) &&
-                isset($errorData['error']['status'])
-            ) {
-
-                $firebaseStatus =
-                    (string)$errorData['error']['status'];
-            }
-
-            $detail =
-                'HTTP ' . $result['status'];
+            $detail = 'Registration ID ' . $rowId .
+                ' (token hash ' . $hashPrefix . '): HTTP ' .
+                $result['status'];
 
             if ($firebaseStatus !== '') {
-
-                $detail .=
-                    ' (' . $firebaseStatus . ')';
+                $detail .= ' (' . $firebaseStatus . ')';
             }
 
             $detail .= ': ' . $firebaseMessage;
 
             $failureDetails[] = $detail;
 
-            // Never log the FCM registration token.
+            // Log structured Firebase details, but NEVER log the FCM token.
+            $detailsJson = json_encode(
+                $errorDetails,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            );
 
             error_log(
-                'Firebase FCM rejection: ' . $detail
+                'Firebase FCM rejection: patient=' . $patientId .
+                ', device=' . $deviceId .
+                ', token_row_id=' . $rowId .
+                ', token_hash_prefix=' . $hashPrefix .
+                ', http=' . $result['status'] .
+                ', status=' . ($firebaseStatus !== '' ? $firebaseStatus : 'not-returned') .
+                ', message=' . $firebaseMessage .
+                ', details=' . ($detailsJson !== false ? $detailsJson : 'could-not-encode-details')
             );
         }
     }
@@ -951,19 +996,23 @@ Send Test Notification
 
     if ($successCount > 0) {
 
-        outputPage(
-
-            'Firebase accepted ' .
-            $successCount .
+        $resultMessage =
+            'Firebase accepted ' . $successCount .
             ' test notification(s). Registered tokens: ' .
-            count($tokens) .
-            '. Failed sends: ' .
-            $failureCount .
-            '. Please check your phone notification panel.',
+            count($tokens) . '. Failed sends: ' . $failureCount . '.';
 
-            true
+        if (count($successDetails) > 0) {
+            $resultMessage .= ' Accepted: ' . implode('; ', $successDetails) . '.';
+        }
 
-        );
+        if (count($failureDetails) > 0) {
+            $resultMessage .= ' Rejected: ' . implode('; ', $failureDetails) . '.';
+        }
+
+        $resultMessage .=
+            ' IMPORTANT: Firebase acceptance does not confirm that the browser displayed the notification. Check the Render logs for the registration IDs and delivery errors.';
+
+        outputPage($resultMessage, true);
     }
 
     throw new RuntimeException(
