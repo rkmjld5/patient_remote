@@ -1,9 +1,8 @@
+
 /*
  * PATIENT MONITORING SYSTEM
  * File: firebase-messaging-sw.js
- *
- * Firebase background notification service worker
- * Firebase project: patientmonitoringsystem-7fb4a
+ * Firebase Project: patientmonitoringsystem-7fb4a
  */
 
 importScripts(
@@ -14,29 +13,26 @@ importScripts(
   'https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js'
 );
 
-// Activate the updated service worker promptly.
 self.addEventListener('install', function(event) {
-  self.skipWaiting();
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', function(event) {
-  event.waitUntil(clients.claim());
+  event.waitUntil(self.clients.claim());
 });
 
-// New Firebase Web app configuration.
 firebase.initializeApp({
   apiKey: "AIzaSyDMvg_UpBpMD2LxXaaEr4nJjqFACmDMwBQ",
   authDomain: "patientmonitoringsystem-7fb4a.firebaseapp.com",
   projectId: "patientmonitoringsystem-7fb4a",
   storageBucket: "patientmonitoringsystem-7fb4a.firebasestorage.app",
   messagingSenderId: "162369941103",
-  appId: "1:162369941103:web:cf94586b2c00137264279a",
-  measurementId: "G-BS5RCBNLY4"
+  appId: "1:162369941103:web:2104e12bc65b87cd64279a",
+  measurementId: "G-87QZS9D0GT"
 });
 
 const messaging = firebase.messaging();
 
-// Background notification handler.
 messaging.onBackgroundMessage(function(payload) {
 
   const data = payload.data || {};
@@ -46,29 +42,24 @@ messaging.onBackgroundMessage(function(payload) {
 
   const options = {
     body: data.body || 'An abnormal patient reading was detected.',
-
     icon: '/favicon.ico',
     badge: '/favicon.ico',
-
     tag: data.alert_id || 'patient-monitor-alert',
-
     renotify: true,
-
     data: {
-      url: '/index.php'
+      url: data.url || '/index.php'
     }
   };
 
   return self.registration.showNotification(title, options);
 });
 
-// Handle notification clicks.
 self.addEventListener('notificationclick', function(event) {
 
   event.notification.close();
 
   const targetUrl = new URL(
-    '/index.php',
+    event.notification.data?.url || '/index.php',
     self.location.origin
   ).href;
 
