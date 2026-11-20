@@ -257,6 +257,8 @@ $ecg_url = 'ecg_history.php';
 
 $alerts_url = 'alerts.php';
 
+$test_notification_url = 'send_push_notification.php';
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -709,6 +711,11 @@ body {
         </a>
 
         <a class="nav-button"
+           href="<?php echo h($test_notification_url); ?>">
+           Test Phone Notification
+        </a>
+
+        <a class="nav-button"
            href="patient_logout.php">
            Logout
         </a>
@@ -750,8 +757,8 @@ const firebaseConfig = {
     projectId: "patientmonitoringsystem-7fb4a",
     storageBucket: "patientmonitoringsystem-7fb4a.firebasestorage.app",
     messagingSenderId: "162369941103",
-    appId: "1:162369941103:web:cf94586b2c00137264279a",
-    measurementId: "G-BS5RCBNLY4"
+    appId: "1:162369941103:web:2104e12bc65b87cd64279a",
+    measurementId: "G-87QZS9D0GT"
 };
 
 // Public Web Push VAPID key from the same Firebase project.
@@ -884,9 +891,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // ------------------------------------------
         // 1. Request notification permission
-        // ------------------------------------------
 
         setPushStatus(
             'Checking browser notification permission...'
@@ -908,11 +913,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // ------------------------------------------
-        // 2. Register the updated service worker.
-        // Always call register so Chrome checks for
-        // the new Firebase configuration.
-        // ------------------------------------------
+        // 2. Register the Firebase service worker
 
         setPushStatus(
             'Registering updated Firebase service worker...'
@@ -934,7 +935,8 @@ async function enablePhoneNotifications() {
 
         );
 
-        // Ask the browser to check for a newer worker.
+        // Check for an updated service worker.
+
         await withTimeout(
 
             registration.update(),
@@ -945,9 +947,7 @@ async function enablePhoneNotifications() {
 
         );
 
-        // ------------------------------------------
-        // 3. Wait for the service worker to be active
-        // ------------------------------------------
+        // 3. Wait for service worker activation
 
         setPushStatus(
             'Waiting for Firebase service worker activation...'
@@ -977,9 +977,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // ------------------------------------------
         // 4. Obtain Firebase Cloud Messaging token
-        // ------------------------------------------
 
         setPushStatus(
             'Service worker is active. Obtaining browser notification token...'
@@ -1009,9 +1007,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // ------------------------------------------
-        // 5. Save token securely on PHP server
-        // ------------------------------------------
+        // 5. Save token on PHP server
 
         setPushStatus(
             'Token obtained. Saving browser registration securely...'
@@ -1071,9 +1067,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // ------------------------------------------
         // 6. Registration successful
-        // ------------------------------------------
 
         setPushStatus(
             'SUCCESS! This browser is registered for patient monitoring notifications.',
