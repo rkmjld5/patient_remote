@@ -635,4 +635,4 @@ button {
         'Test notification failed. Please check the Render application logs for the technical error.'
     );
 }
-</?php>
+
