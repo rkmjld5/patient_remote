@@ -39,8 +39,25 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // =====================================================
 
 const FIREBASE_PROJECT_ID = 'patientmonitoringsystem-62f35';
-const FIREBASE_SERVICE_ACCOUNT_FILE = 'C:/xampp/private/firebase-service-account.json';
-const FIREBASE_CA_BUNDLE = 'C:/xampp/php/extras/ssl/cacert-avast.pem';
+
+// Render uses Secret Files and its system CA bundle. Environment variables
+// can override these paths. Windows/XAMPP keeps the previous local paths.
+$firebaseServiceAccountFile = getenv('FIREBASE_SERVICE_ACCOUNT_FILE');
+if (!$firebaseServiceAccountFile) {
+    $firebaseServiceAccountFile = (PHP_OS_FAMILY === 'Windows')
+        ? 'C:/xampp/private/firebase-service-account.json'
+        : '/etc/secrets/firebase-service-account.json';
+}
+
+$firebaseCaBundle = getenv('FIREBASE_CA_BUNDLE');
+if (!$firebaseCaBundle) {
+    $firebaseCaBundle = (PHP_OS_FAMILY === 'Windows')
+        ? 'C:/xampp/php/extras/ssl/cacert-avast.pem'
+        : '/etc/ssl/certs/ca-certificates.crt';
+}
+
+define('FIREBASE_SERVICE_ACCOUNT_FILE', $firebaseServiceAccountFile);
+define('FIREBASE_CA_BUNDLE', $firebaseCaBundle);
 
 function base64UrlEncode($value)
 {
@@ -165,7 +182,8 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
         'sent' => 0,
         'failed' => 0,
         'registered_tokens' => 0,
-        'status' => 'NO_NEW_ALERTS'
+        'status' => 'NO_NEW_ALERTS',
+        'error' => ''
     );
 
     if (count($alerts) === 0) {
@@ -320,6 +338,10 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
             $safeError = ($response === false)
                 ? $curlError
                 : ('HTTP ' . $httpCode . ': ' . substr((string)$response, 0, 700));
+
+            // Keep diagnostics useful without ever logging the FCM token.
+            $safeError = substr((string)$safeError, 0, 700);
+            $result['error'] = $safeError;
 
             error_log(
                 'Firebase push failed for patient ' . $patientId .
@@ -1353,11 +1375,11 @@ try {
         } catch (Throwable $pushError) {
 
             $pushResult['status'] = 'ERROR';
-            $pushResult['error'] = $pushError->getMessage();
+            $pushResult['error'] = substr($pushError->getMessage(), 0, 700);
 
             error_log(
                 'Firebase push notification error: ' .
-                $pushError->getMessage()
+                $pushResult['error']
             );
         }
     }
@@ -1392,6 +1414,7 @@ try {
             'push_notifications_failed' => $pushResult['failed'],
             'push_registered_tokens' => $pushResult['registered_tokens'],
             'push_status' => $pushResult['status'],
+            'push_error' => $pushResult['error'] ?? '',
 
             'email_notifications_sent' => 0,
             'email_pending_smtp_configuration' => $emailPendingConfiguration,
