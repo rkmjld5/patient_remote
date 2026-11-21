@@ -37,8 +37,6 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // =====================================================
 // FIREBASE PUSH NOTIFICATION CONFIGURATION
 // =====================================================
-// The service-account file is deliberately outside htdocs.
-// Keep the same service-account file used by the push test.
 
 const FIREBASE_PROJECT_ID = 'patientmonitoringsystem-62f35';
 const FIREBASE_SERVICE_ACCOUNT_FILE = 'C:/xampp/private/firebase-service-account.json';
@@ -49,7 +47,6 @@ function base64UrlEncode($value)
     return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
 }
 
-/** Obtain a short-lived Google OAuth access token using the service account. */
 function getFirebaseAccessToken()
 {
     if (!is_file(FIREBASE_SERVICE_ACCOUNT_FILE) || !is_readable(FIREBASE_SERVICE_ACCOUNT_FILE)) {
@@ -76,7 +73,12 @@ function getFirebaseAccessToken()
     }
 
     $now = time();
-    $jwtHeader = base64UrlEncode(json_encode(array('alg' => 'RS256', 'typ' => 'JWT')));
+
+    $jwtHeader = base64UrlEncode(json_encode(array(
+        'alg' => 'RS256',
+        'typ' => 'JWT'
+    )));
+
     $jwtClaims = base64UrlEncode(json_encode(array(
         'iss' => $serviceAccount['client_email'],
         'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
@@ -86,6 +88,7 @@ function getFirebaseAccessToken()
     )));
 
     $unsignedJwt = $jwtHeader . '.' . $jwtClaims;
+
     $privateKey = openssl_pkey_get_private($serviceAccount['private_key']);
 
     if ($privateKey === false) {
@@ -93,7 +96,14 @@ function getFirebaseAccessToken()
     }
 
     $signature = '';
-    $signed = openssl_sign($unsignedJwt, $signature, $privateKey, OPENSSL_ALGO_SHA256);
+
+    $signed = openssl_sign(
+        $unsignedJwt,
+        $signature,
+        $privateKey,
+        OPENSSL_ALGO_SHA256
+    );
+
     openssl_free_key($privateKey);
 
     if (!$signed) {
@@ -101,19 +111,23 @@ function getFirebaseAccessToken()
     }
 
     $assertion = $unsignedJwt . '.' . base64UrlEncode($signature);
+
     $postFields = http_build_query(array(
         'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
         'assertion' => $assertion
     ));
 
     $ch = curl_init($serviceAccount['token_uri']);
+
     curl_setopt_array($ch, array(
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $postFields,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CONNECTTIMEOUT => 15,
         CURLOPT_TIMEOUT => 30,
-        CURLOPT_HTTPHEADER => array('Content-Type: application/x-www-form-urlencoded'),
+        CURLOPT_HTTPHEADER => array(
+            'Content-Type: application/x-www-form-urlencoded'
+        ),
         CURLOPT_CAINFO => FIREBASE_CA_BUNDLE,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2
@@ -122,6 +136,7 @@ function getFirebaseAccessToken()
     $response = curl_exec($ch);
     $curlError = curl_error($ch);
     $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
     curl_close($ch);
 
     if ($response === false) {
@@ -129,15 +144,20 @@ function getFirebaseAccessToken()
     }
 
     $decoded = json_decode($response, true);
+
     if ($httpCode < 200 || $httpCode >= 300 || empty($decoded['access_token'])) {
-        $detail = is_array($decoded) ? ($decoded['error_description'] ?? $decoded['error'] ?? '') : '';
-        throw new RuntimeException('Firebase OAuth failed (HTTP ' . $httpCode . '). ' . $detail);
+        $detail = is_array($decoded)
+            ? ($decoded['error_description'] ?? $decoded['error'] ?? '')
+            : '';
+
+        throw new RuntimeException(
+            'Firebase OAuth failed (HTTP ' . $httpCode . '). ' . $detail
+        );
     }
 
     return $decoded['access_token'];
 }
 
-/** Send one combined notification to every enabled token for this patient/device. */
 function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $mode)
 {
     $result = array(
@@ -153,6 +173,7 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
     }
 
     $tokens = array();
+
     $tokenStmt = $conn->prepare(
         "SELECT DISTINCT fcm_token
          FROM patient_push_tokens
@@ -162,16 +183,20 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
            AND fcm_token IS NOT NULL
            AND fcm_token <> ''"
     );
+
     $tokenStmt->bind_param('ss', $patientId, $deviceId);
     $tokenStmt->execute();
+
     $tokenRows = $tokenStmt->get_result();
 
     while ($tokenRow = $tokenRows->fetch_assoc()) {
         $token = trim((string)$tokenRow['fcm_token']);
+
         if ($token !== '') {
             $tokens[] = $token;
         }
     }
+
     $tokenStmt->close();
 
     $result['registered_tokens'] = count($tokens);
@@ -182,11 +207,13 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
     }
 
     $accessToken = getFirebaseAccessToken();
+
     $title = ($mode === 'SIMULATION')
         ? 'TEST ALERT - Patient Monitoring'
         : 'PATIENT MONITORING ALERT';
 
     $parts = array();
+
     foreach ($alerts as $alert) {
         $parameter = (string)($alert['parameter'] ?? 'Alert');
         $value = (string)($alert['value'] ?? '');
@@ -204,23 +231,29 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
     }
 
     $body = implode(' | ', $parts);
+
     if ($body === '') {
         $body = 'An abnormal patient monitoring reading was detected.';
     }
+
     if (strlen($body) > 900) {
         $body = substr($body, 0, 897) . '...';
     }
 
-    $endpoint = 'https://fcm.googleapis.com/v1/projects/' . FIREBASE_PROJECT_ID . '/messages:send';
+    $endpoint = 'https://fcm.googleapis.com/v1/projects/' .
+        FIREBASE_PROJECT_ID . '/messages:send';
 
     foreach ($tokens as $token) {
+
         $message = array(
             'message' => array(
                 'token' => $token,
+
                 'notification' => array(
                     'title' => $title,
                     'body' => $body
                 ),
+
                 'data' => array(
                     'title' => $title,
                     'body' => $body,
@@ -229,12 +262,14 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
                     'mode' => (string)$mode,
                     'url' => '/index.php'
                 ),
+
                 'android' => array(
                     'priority' => 'high',
                     'notification' => array(
                         'channel_id' => 'patient_monitor_alerts'
                     )
                 ),
+
                 'webpush' => array(
                     'headers' => array('Urgency' => 'high'),
                     'notification' => array(
@@ -247,8 +282,13 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
             )
         );
 
-        $json = json_encode($message, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $json = json_encode(
+            $message,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        );
+
         $ch = curl_init($endpoint);
+
         curl_setopt_array($ch, array(
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $json,
@@ -267,6 +307,7 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
         $response = curl_exec($ch);
         $curlError = curl_error($ch);
         $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
         curl_close($ch);
 
         $result['attempted']++;
@@ -275,9 +316,11 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
             $result['sent']++;
         } else {
             $result['failed']++;
+
             $safeError = ($response === false)
                 ? $curlError
                 : ('HTTP ' . $httpCode . ': ' . substr((string)$response, 0, 700));
+
             error_log(
                 'Firebase push failed for patient ' . $patientId .
                 ', device ' . $deviceId . ': ' . $safeError
@@ -285,7 +328,10 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
         }
     }
 
-    $result['status'] = ($result['failed'] === 0) ? 'SENT' : 'PARTIAL_OR_FAILED';
+    $result['status'] = ($result['failed'] === 0)
+        ? 'SENT'
+        : 'PARTIAL_OR_FAILED';
+
     return $result;
 }
 
@@ -371,9 +417,7 @@ if ($receivedToken === '') {
         $authorization = trim($_SERVER['HTTP_AUTHORIZATION']);
     }
 
-    if (
-        preg_match('/^Bearer\s+(.+)$/i', $authorization, $matches)
-    ) {
+    if (preg_match('/^Bearer\s+(.+)$/i', $authorization, $matches)) {
         $receivedToken = trim($matches[1]);
     }
 }
@@ -430,9 +474,7 @@ if ($deviceId === '' || strlen($deviceId) > 32) {
 
 try {
 
-    // -------------------------------------------------
     // 7A. VERIFY DEVICE
-    // -------------------------------------------------
 
     $stmt = $conn->prepare(
         "SELECT
@@ -476,9 +518,7 @@ try {
         );
     }
 
-    // -------------------------------------------------
     // 7B. CHECK DEVICE ACCESS DATES
-    // -------------------------------------------------
 
     $nowObject = new DateTime(
         'now',
@@ -541,9 +581,7 @@ try {
         }
     }
 
-    // -------------------------------------------------
     // 7C. GET PATIENT EMAIL
-    // -------------------------------------------------
 
     $stmt = $conn->prepare(
         "SELECT email
@@ -577,9 +615,7 @@ try {
         $patientEmail = '';
     }
 
-    // -------------------------------------------------
     // 7D. VALIDATE SENSOR READINGS
-    // -------------------------------------------------
 
     $requiredFields = array(
         'room_temperature',
@@ -611,9 +647,7 @@ try {
     $spo2            = (float)$data['spo2'];
     $bodyTemperature = (float)$data['body_temperature'];
 
-    // -------------------------------------------------
     // 7E. VALIDATE MODE
-    // -------------------------------------------------
 
     $mode = strtoupper(
         trim((string)($data['mode'] ?? 'SIMULATION'))
@@ -631,9 +665,7 @@ try {
         $timezone = 'Asia/Kolkata';
     }
 
-    // -------------------------------------------------
     // 7F. RECORDED DATE AND TIME
-    // -------------------------------------------------
 
     $recordedAt = $serverNow;
 
@@ -733,17 +765,6 @@ try {
     // 9. READ PATIENT-SPECIFIC ALERT SETTINGS
     // =================================================
 
-    /*
-     * The existing patient_alert_settings table is used.
-     *
-     * Expected parameters:
-     * BPM
-     * SpO2
-     * BODY_TEMP
-     *
-     * No settings = no alerts for that parameter.
-     */
-
     $alertSettings = array();
 
     $settingsStmt = $conn->prepare(
@@ -770,7 +791,6 @@ try {
 
         $parameter = trim((string)$setting['parameter_name']);
 
-        // Use the newest setting if duplicate rows exist.
         if (!isset($alertSettings[$parameter])) {
             $alertSettings[$parameter] = $setting;
         }
@@ -782,6 +802,8 @@ try {
     // 10. CREATE ALERT STATE TABLE IF MISSING
     // =================================================
 
+    // Updated to match the existing alert_state table.
+
     $conn->query(
         "CREATE TABLE IF NOT EXISTS alert_state (
             patient_id VARCHAR(30) NOT NULL,
@@ -789,7 +811,7 @@ try {
             parameter_name VARCHAR(40) NOT NULL,
             is_active TINYINT(1) NOT NULL DEFAULT 0,
             last_alert_id BIGINT(20) UNSIGNED DEFAULT NULL,
-            last_value VARCHAR(40) DEFAULT NULL,
+            last_measured_value VARCHAR(40) DEFAULT NULL,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (
@@ -892,9 +914,7 @@ try {
 
     $conn->begin_transaction();
 
-    // -------------------------------------------------
     // 12A. SAVE MONITORING READINGS
-    // -------------------------------------------------
 
     $monitorStmt = $conn->prepare(
         "INSERT INTO monitoring_readings
@@ -933,9 +953,7 @@ try {
 
     $monitorStmt->close();
 
-    // -------------------------------------------------
     // 12B. SAVE ECG READINGS
-    // -------------------------------------------------
 
     $ecgId = null;
 
@@ -989,8 +1007,6 @@ try {
 
     foreach ($parameters as $parameter) {
 
-        // Keep TEST and REAL states separate.
-
         $stateParameter = ($mode === 'SIMULATION')
             ? 'TEST_' . $parameter
             : $parameter;
@@ -1026,7 +1042,7 @@ try {
             "SELECT
                 is_active,
                 last_alert_id,
-                last_value
+                last_measured_value
              FROM alert_state
              WHERE patient_id = ?
                AND device_id = ?
@@ -1052,9 +1068,7 @@ try {
             (int)$state['is_active'] === 1
         );
 
-        // -------------------------------------------------
         // NORMAL READING: RESET ACTIVE CONDITION
-        // -------------------------------------------------
 
         if ($currentCondition === null) {
 
@@ -1063,7 +1077,7 @@ try {
                 $resetStmt = $conn->prepare(
                     "UPDATE alert_state
                      SET is_active = 0,
-                         last_value = NULL
+                         last_measured_value = NULL
                      WHERE patient_id = ?
                        AND device_id = ?
                        AND parameter_name = ?"
@@ -1083,9 +1097,7 @@ try {
             continue;
         }
 
-        // -------------------------------------------------
         // ABNORMAL READING: CHECK COOLDOWN
-        // -------------------------------------------------
 
         $setting = $currentCondition['setting'];
 
@@ -1132,8 +1144,6 @@ try {
 
             if ($lastAlertAt === null) {
 
-                // No valid previous alert: allow a new alert.
-
                 $shouldCreateAlert = true;
 
             } else {
@@ -1150,15 +1160,13 @@ try {
             }
         }
 
-        // -------------------------------------------------
         // UPDATE CURRENT VALUE
-        // -------------------------------------------------
 
         if (!$shouldCreateAlert) {
 
             $valueUpdate = $conn->prepare(
                 "UPDATE alert_state
-                 SET last_value = ?
+                 SET last_measured_value = ?
                  WHERE patient_id = ?
                    AND device_id = ?
                    AND parameter_name = ?"
@@ -1178,9 +1186,7 @@ try {
             continue;
         }
 
-        // -------------------------------------------------
         // DETERMINE EMAIL SETTINGS
-        // -------------------------------------------------
 
         $emailEnabled = (
             (int)$setting['email_enabled'] === 1
@@ -1211,13 +1217,10 @@ try {
         } elseif ($emailRecipient === '') {
             $emailStatus = 'NO_EMAIL';
         } else {
-            // SMTP will be configured in the next stage.
             $emailStatus = 'NOT_CONFIGURED';
         }
 
-        // -------------------------------------------------
         // CREATE ALERT RECORD
-        // -------------------------------------------------
 
         $alertMessage = $currentCondition['message'];
 
@@ -1262,8 +1265,6 @@ try {
 
         $alertsCreated++;
 
-        // Keep details for the API response.
-
         $alertIds[] = array(
             'alert_id' => $newAlertId,
             'parameter' => $parameter,
@@ -1276,15 +1277,13 @@ try {
             'repeated' => $isRepeatedAlert
         );
 
-        // -------------------------------------------------
         // UPDATE ALERT STATE
-        // -------------------------------------------------
 
         $stateUpdate = $conn->prepare(
             "UPDATE alert_state
              SET is_active = 1,
                  last_alert_id = ?,
-                 last_value = ?
+                 last_measured_value = ?
              WHERE patient_id = ?
                AND device_id = ?
                AND parameter_name = ?"
@@ -1313,16 +1312,6 @@ try {
     // 15. EMAIL STATUS
     // =================================================
 
-    /*
-     * Email is intentionally not sent in this version.
-     *
-     * The patient's email address is stored separately.
-     * SMTP configuration will be added and tested next.
-     *
-     * This prevents PHP mail() from falsely reporting
-     * success or failure on a local XAMPP installation.
-     */
-
     $emailPendingConfiguration = 0;
     $emailRecipientsConfigured = 0;
 
@@ -1340,9 +1329,6 @@ try {
     // =================================================
     // 16. SEND FIREBASE PUSH NOTIFICATIONS
     // =================================================
-    // Send only after the database transaction commits. The alert
-    // cooldown above ensures the ESP32's 5-second uploads do not
-    // produce a new notification every 5 seconds.
 
     $pushResult = array(
         'attempted' => 0,
@@ -1353,7 +1339,9 @@ try {
     );
 
     if ($alertsCreated > 0) {
+
         try {
+
             $pushResult = sendFirebasePushNotifications(
                 $conn,
                 $patientId,
@@ -1361,11 +1349,16 @@ try {
                 $alertIds,
                 $mode
             );
+
         } catch (Throwable $pushError) {
-            // A Firebase outage must not undo readings/alerts already saved.
+
             $pushResult['status'] = 'ERROR';
             $pushResult['error'] = $pushError->getMessage();
-            error_log('Firebase push notification error: ' . $pushError->getMessage());
+
+            error_log(
+                'Firebase push notification error: ' .
+                $pushError->getMessage()
+            );
         }
     }
 
