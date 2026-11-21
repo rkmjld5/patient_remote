@@ -891,7 +891,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // 1. Request notification permission
+        // 1. Request notification permission.
 
         setPushStatus(
             'Checking browser notification permission...'
@@ -913,41 +913,75 @@ async function enablePhoneNotifications() {
 
         }
 
-        // 2. Register the Firebase service worker
+        // 2. REUSE THE EXISTING SERVICE WORKER.
+        //
+        // Do not register or update it unnecessarily.
+        // The existing worker was already verified as active.
+        // Only register a new one if no registration exists.
 
         setPushStatus(
-            'Registering updated Firebase service worker...'
+            'Checking existing Firebase service worker...'
         );
 
-        const registration = await withTimeout(
+        let registration = await withTimeout(
 
-            navigator.serviceWorker.register(
-                '/firebase-messaging-sw.js',
-                {
-                    scope: '/',
-                    updateViaCache: 'none'
-                }
-            ),
+            navigator.serviceWorker.getRegistration('/'),
 
-            30000,
+            10000,
 
-            'Service-worker registration timed out.'
+            'Could not check the existing service worker registration.'
 
         );
 
-        // Check for an updated service worker.
+        if (!registration) {
 
-        await withTimeout(
+            setPushStatus(
+                'No existing service worker found. Registering Firebase service worker...'
+            );
 
-            registration.update(),
+            registration = await withTimeout(
 
-            20000,
+                navigator.serviceWorker.register(
+                    '/firebase-messaging-sw.js',
+                    {
+                        scope: '/',
+                        updateViaCache: 'none'
+                    }
+                ),
 
-            'Service-worker update check timed out.'
+                30000,
 
-        );
+                'Service-worker registration timed out.'
 
-        // 3. Wait for service worker activation
+            );
+
+        } else {
+
+            console.log(
+                'Using existing service worker:',
+                registration.scope
+            );
+
+        }
+
+        // Confirm that the registration belongs to our Firebase worker.
+
+        if (
+            registration.active &&
+            registration.active.scriptURL !==
+                new URL(
+                    '/firebase-messaging-sw.js',
+                    window.location.origin
+                ).href
+        ) {
+
+            throw new Error(
+                'A different service worker is registered for this website. Please contact the administrator before changing it.'
+            );
+
+        }
+
+        // 3. Wait for service worker activation.
 
         setPushStatus(
             'Waiting for Firebase service worker activation...'
@@ -977,7 +1011,26 @@ async function enablePhoneNotifications() {
 
         }
 
-        // 4. Obtain Firebase Cloud Messaging token
+        if (
+            activeRegistration.active.scriptURL !==
+            new URL(
+                '/firebase-messaging-sw.js',
+                window.location.origin
+            ).href
+        ) {
+
+            throw new Error(
+                'The active service worker is not the Firebase messaging worker.'
+            );
+
+        }
+
+        console.log(
+            'Firebase service worker is active:',
+            activeRegistration.active.scriptURL
+        );
+
+        // 4. Obtain Firebase Cloud Messaging token.
 
         setPushStatus(
             'Service worker is active. Obtaining browser notification token...'
@@ -1007,7 +1060,12 @@ async function enablePhoneNotifications() {
 
         }
 
-        // 5. Save token on PHP server
+        console.log(
+            'Firebase registration token obtained. Length:',
+            token.length
+        );
+
+        // 5. Save token on PHP server.
 
         setPushStatus(
             'Token obtained. Saving browser registration securely...'
@@ -1067,7 +1125,7 @@ async function enablePhoneNotifications() {
 
         }
 
-        // 6. Registration successful
+        // 6. Registration successful.
 
         setPushStatus(
             'SUCCESS! This browser is registered for patient monitoring notifications.',
@@ -1340,7 +1398,7 @@ function drawECG(samples) {
 
     ctx.fillRect(0, 0, width, height);
 
-    // ECG grid
+    // ECG grid.
 
     ctx.strokeStyle = '#18394a';
 
