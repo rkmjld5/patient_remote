@@ -38,8 +38,8 @@ mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 // FIREBASE PUSH NOTIFICATION CONFIGURATION
 // =====================================================
 
-const FIREBASE_PROJECT_ID = 'patientmonitoringsystem-62f35';
-
+//const FIREBASE_PROJECT_ID = 'patientmonitoringsystem-62f35';
+const FIREBASE_PROJECT_ID = 'patientmonitoringsystem-7fb4a';
 // Render uses Secret Files and its system CA bundle. Environment variables
 // can override these paths. Windows/XAMPP keeps the previous local paths.
 $firebaseServiceAccountFile = getenv('FIREBASE_SERVICE_ACCOUNT_FILE');
