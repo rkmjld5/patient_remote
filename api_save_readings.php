@@ -175,6 +175,7 @@ function getFirebaseAccessToken()
     return $decoded['access_token'];
 }
 
+
 function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $mode)
 {
     $result = array(
@@ -182,6 +183,7 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
         'sent' => 0,
         'failed' => 0,
         'registered_tokens' => 0,
+        'invalid_tokens_disabled' => 0,
         'status' => 'NO_NEW_ALERTS',
         'error' => ''
     );
@@ -190,10 +192,12 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
         return $result;
     }
 
+    // Retrieve token ID and hash so that only the confirmed
+    // invalid database record can be disabled.
     $tokens = array();
 
     $tokenStmt = $conn->prepare(
-        "SELECT DISTINCT fcm_token
+        "SELECT id, fcm_token, token_hash
          FROM patient_push_tokens
          WHERE patient_id = ?
            AND device_id = ?
@@ -209,9 +213,14 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
 
     while ($tokenRow = $tokenRows->fetch_assoc()) {
         $token = trim((string)$tokenRow['fcm_token']);
+        $tokenHash = trim((string)$tokenRow['token_hash']);
 
         if ($token !== '') {
-            $tokens[] = $token;
+            $tokens[] = array(
+                'id' => (int)$tokenRow['id'],
+                'token' => $token,
+                'token_hash' => $tokenHash
+            );
         }
     }
 
@@ -261,7 +270,19 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
     $endpoint = 'https://fcm.googleapis.com/v1/projects/' .
         FIREBASE_PROJECT_ID . '/messages:send';
 
-    foreach ($tokens as $token) {
+    // Prepare the database update once.
+    $disableStmt = $conn->prepare(
+        "UPDATE patient_push_tokens
+         SET enabled = 0,
+             updated_at = NOW()
+         WHERE id = ?
+           AND token_hash = ?
+           AND enabled = 1"
+    );
+
+    foreach ($tokens as $tokenRow) {
+
+        $token = $tokenRow['token'];
 
         $message = array(
             'message' => array(
@@ -332,23 +353,93 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
 
         if ($response !== false && $httpCode >= 200 && $httpCode < 300) {
             $result['sent']++;
-        } else {
-            $result['failed']++;
-
-            $safeError = ($response === false)
-                ? $curlError
-                : ('HTTP ' . $httpCode . ': ' . substr((string)$response, 0, 700));
-
-            // Keep diagnostics useful without ever logging the FCM token.
-            $safeError = substr((string)$safeError, 0, 700);
-            $result['error'] = $safeError;
-
-            error_log(
-                'Firebase push failed for patient ' . $patientId .
-                ', device ' . $deviceId . ': ' . $safeError
-            );
+            continue;
         }
+
+        $result['failed']++;
+
+        $errorData = ($response !== false)
+            ? json_decode($response, true)
+            : null;
+
+        $errorStatus = '';
+        $errorMessage = '';
+
+        if (is_array($errorData) && isset($errorData['error'])) {
+            $errorStatus = (string)($errorData['error']['status'] ?? '');
+            $errorMessage = (string)($errorData['error']['message'] ?? '');
+        }
+
+        // Only disable a token when Firebase confirms permanent
+        // unregistration. Do not disable for temporary errors.
+        $permanentlyInvalid = (
+            strtoupper($errorStatus) === 'UNREGISTERED'
+            || stripos($errorMessage, 'NotRegistered') !== false
+            || stripos($errorMessage, 'Device unregistered') !== false
+        );
+
+        // Also inspect structured Firebase error details.
+        if (
+            !$permanentlyInvalid &&
+            is_array($errorData) &&
+            isset($errorData['error']['details']) &&
+            is_array($errorData['error']['details'])
+        ) {
+            foreach ($errorData['error']['details'] as $detail) {
+                if (
+                    isset($detail['errorCode']) &&
+                    strtoupper((string)$detail['errorCode']) === 'UNREGISTERED'
+                ) {
+                    $permanentlyInvalid = true;
+                    break;
+                }
+            }
+        }
+
+        if (
+            $permanentlyInvalid &&
+            $tokenRow['id'] > 0 &&
+            preg_match('/^[a-f0-9]{64}$/i', $tokenRow['token_hash'])
+        ) {
+            try {
+                $tokenId = (int)$tokenRow['id'];
+                $tokenHash = $tokenRow['token_hash'];
+
+                $disableStmt->bind_param('is', $tokenId, $tokenHash);
+                $disableStmt->execute();
+
+                if ($disableStmt->affected_rows > 0) {
+                    $result['invalid_tokens_disabled']++;
+
+                    error_log(
+                        'Firebase: permanently invalid token disabled. ' .
+                        'Patient ' . $patientId .
+                        ', device ' . $deviceId .
+                        ', token record ID ' . $tokenId
+                    );
+                }
+            } catch (Throwable $disableError) {
+                error_log(
+                    'Firebase token cleanup failed for record ID ' .
+                    $tokenRow['id'] . ': ' . $disableError->getMessage()
+                );
+            }
+        }
+
+        $safeError = ($response === false)
+            ? $curlError
+            : ('HTTP ' . $httpCode . ': ' . substr((string)$response, 0, 700));
+
+        $safeError = substr((string)$safeError, 0, 700);
+        $result['error'] = $safeError;
+
+        error_log(
+            'Firebase push failed for patient ' . $patientId .
+            ', device ' . $deviceId . ': ' . $safeError
+        );
     }
+
+    $disableStmt->close();
 
     $result['status'] = ($result['failed'] === 0)
         ? 'SENT'
@@ -356,6 +447,7 @@ function sendFirebasePushNotifications($conn, $patientId, $deviceId, $alerts, $m
 
     return $result;
 }
+
 
 // =====================================================
 // 1. JSON RESPONSE
