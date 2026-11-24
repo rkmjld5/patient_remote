@@ -1455,15 +1455,14 @@ try {
     if ($alertsCreated > 0) {
 
         try {
-
             $pushResult = sendFirebasePushNotifications(
                 $conn,
                 $patientId,
                 $deviceId,
-                $alertIds,
+                $conditions,
                 $mode
             );
-
+           
         } catch (Throwable $pushError) {
 
             $pushResult['status'] = 'ERROR';
